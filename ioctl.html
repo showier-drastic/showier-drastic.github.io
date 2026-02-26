@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Linux ioctl Command Decoder</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+        }
+        .container {
+            background: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            max-width: 500px;
+            width: 100%;
+        }
+        h2 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: monospace;
+        }
+        .radio-group {
+            margin-top: 10px;
+            display: flex;
+            gap: 15px;
+        }
+        .output {
+            margin-top: 25px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+        }
+        .output-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #dee2e6;
+            font-family: monospace;
+            font-size: 15px;
+        }
+        .output-row:last-child {
+            border-bottom: none;
+        }
+        .label {
+            font-weight: bold;
+            color: #495057;
+        }
+        .value {
+            color: #d63384;
+        }
+        .note {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        .error-msg {
+            color: #dc3545;
+            font-weight: bold;
+            text-align: center;
+            padding: 10px 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>ioctl Command Decoder</h2>
+    
+    <div class="form-group">
+        <label for="ioctlInput">Enter ioctl Command:</label>
+        <input type="text" id="ioctlInput" placeholder="e.g., 0x80047476 or 2147775606">
+        <div class="note">Decodes automatically. Switches to HEX if A-F or 0x is detected.</div>
+        
+        <div class="radio-group">
+            <label>
+                <input type="radio" name="base" id="baseHex" value="16" checked> Hex
+            </label>
+            <label>
+                <input type="radio" name="base" id="baseInt" value="10"> Integer
+            </label>
+        </div>
+    </div>
+
+    <div class="output" id="outputSection" style="display: none;">
+        <div id="errorMessage" class="error-msg" style="display: none;"></div>
+        
+        <div id="resultRows">
+            <div class="output-row">
+                <span class="label">Direction (dir):</span>
+                <span class="value" id="outDir"></span>
+            </div>
+            <div class="output-row">
+                <span class="label">Size (size):</span>
+                <span class="value" id="outSize"></span>
+            </div>
+            <div class="output-row">
+                <span class="label">Type (magic):</span>
+                <span class="value" id="outType"></span>
+            </div>
+            <div class="output-row">
+                <span class="label">Number (nr):</span>
+                <span class="value" id="outNr"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Set up event listeners for real-time decoding
+    document.getElementById('ioctlInput').addEventListener('input', handleInput);
+    document.getElementById('baseHex').addEventListener('change', decodeIoctl);
+    document.getElementById('baseInt').addEventListener('change', decodeIoctl);
+
+    function handleInput() {
+        const inputStr = document.getElementById('ioctlInput').value.trim();
+        const hexRadio = document.getElementById('baseHex');
+        const intRadio = document.getElementById('baseInt');
+
+        // Auto-detect Hex
+        if (/0x|[a-f]/i.test(inputStr)) {
+            hexRadio.checked = true;
+            intRadio.disabled = true; 
+        } else {
+            intRadio.disabled = false;
+        }
+
+        decodeIoctl();
+    }
+
+    function decodeIoctl() {
+        let inputStr = document.getElementById('ioctlInput').value.trim();
+        const isHex = document.getElementById('baseHex').checked;
+        const base = isHex ? 16 : 10;
+        
+        const outputSection = document.getElementById('outputSection');
+        const errorMessage = document.getElementById('errorMessage');
+        const resultRows = document.getElementById('resultRows');
+
+        // Hide output entirely if input is empty
+        if (!inputStr) {
+            outputSection.style.display = 'none';
+            return;
+        }
+
+        outputSection.style.display = 'block';
+
+        // Clean up input for parsing and validation
+        if (isHex && inputStr.toLowerCase().startsWith("0x")) {
+            inputStr = inputStr.slice(2);
+        }
+
+        // Validate characters based on selected base
+        const isValid = isHex ? /^[0-9a-fA-F]+$/.test(inputStr) : /^[0-9]+$/.test(inputStr);
+
+        if (!isValid) {
+            showError("Invalid characters for the selected base.");
+            return;
+        }
+
+        // Parse to integer
+        let cmd = parseInt(inputStr, base);
+        if (isNaN(cmd)) {
+            showError("Could not parse the input.");
+            return;
+        }
+
+        // Hide error, show results
+        errorMessage.style.display = 'none';
+        resultRows.style.display = 'block';
+
+        // Ensure unsigned 32-bit
+        cmd = cmd >>> 0; 
+
+        // Linux Generic ioctl bit shifting macros
+        const nr   = cmd & 0xFF;                  // Bits 0-7
+        const type = (cmd >>> 8) & 0xFF;          // Bits 8-15
+        const size = (cmd >>> 16) & 0x3FFF;       // Bits 16-29
+        const dir  = (cmd >>> 30) & 0x03;         // Bits 30-31
+
+        // Format Direction
+        let dirStr = "";
+        switch(dir) {
+            case 0: dirStr = "_IOC_NONE"; break;
+            case 1: dirStr = "_IOC_WRITE"; break;
+            case 2: dirStr = "_IOC_READ"; break;
+            case 3: dirStr = "_IOC_READ | _IOC_WRITE"; break;
+        }
+
+        // Format Type
+        let typeChar = (type >= 32 && type <= 126) ? `'${String.fromCharCode(type)}'` : 'Non-printable';
+
+        // Update UI
+        document.getElementById('outDir').innerText = `${dirStr} (${dir})`;
+        document.getElementById('outSize').innerText = `${size} bytes (0x${size.toString(16).toUpperCase()})`;
+        document.getElementById('outType').innerText = `0x${type.toString(16).toUpperCase()} (${typeChar})`;
+        document.getElementById('outNr').innerText = `${nr} (0x${nr.toString(16).toUpperCase()})`;
+    }
+
+    function showError(message) {
+        const errorMessage = document.getElementById('errorMessage');
+        const resultRows = document.getElementById('resultRows');
+        
+        errorMessage.innerText = message;
+        errorMessage.style.display = 'block';
+        resultRows.style.display = 'none';
+    }
+</script>
+
+</body>
+</html>
